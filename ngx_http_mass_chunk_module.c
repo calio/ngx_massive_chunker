@@ -131,6 +131,7 @@ ngx_http_mass_chunk_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
     ngx_buf_t                           *b;
     ngx_int_t                           rc;
     ngx_int_t                           num;
+    ngx_int_t                           random;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_mass_chunk_module);
     if (ctx == NULL) {
@@ -156,20 +157,33 @@ ngx_http_mass_chunk_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
                 return NGX_ERROR;
             }
 
-            copy_end = ngx_min(copy_start + lcf->max_size, in->buf->last);
+            if (lcf->max_size != 0) {
+                random = rand() % lcf->max_size + 1;
+            } else {
+                random = 0;
+            }
+            copy_end = ngx_min(copy_start + random, in->buf->last);
 
-            /* create buf */
-            cl = ngx_chain_get_free_buf(r->pool, &ctx->free);
+            cl = ngx_alloc_chain_link(r->pool);
             if (cl == NULL) {
                 return NGX_ERROR;
             }
+
+            cl->buf = ngx_calloc_buf(r->pool);
+            if (cl->buf == NULL) {
+                return NGX_ERROR;
+            }
+
+            cl->next = NULL;
             b = cl->buf;
 
-            /* copy attributes */
             ngx_memcpy(b, in->buf, sizeof(ngx_buf_t));
 
-            b->pos = copy_start;
-            b->last = copy_end;
+            b->pos = ngx_pcalloc(r->pool, copy_end - copy_start);
+            ngx_memcpy(b->pos, copy_start, copy_end - copy_start);
+            b->last = b->pos + (copy_end - copy_start);
+            b->start = b->pos;
+            b->end = b->last;
 
             b->shadow = NULL;
             b->last_buf = 0;
@@ -208,6 +222,8 @@ ngx_http_mass_chunk_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
             *ctx->last_out = cl;
             ctx->last_out = &cl->next;
 
+            ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                           "massive chunker last buf");
             b->last_buf = 1;
          }
 
@@ -267,6 +283,7 @@ ngx_http_mass_chunk_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 static ngx_int_t
 ngx_http_mass_chunk_init(ngx_conf_t *cf) {
 
+    srand(time(NULL));
     ngx_http_next_header_filter = ngx_http_top_header_filter;
     ngx_http_top_header_filter = ngx_http_mass_chunk_header_filter;
 
